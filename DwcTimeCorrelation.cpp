@@ -15,6 +15,8 @@ static struct argp_option options[] =
     { "spiroc_raw_file", 'w', "SPIROC_RAW_FILE", 0, "raw file for the statistics data from AHCAL RAW file saved by EUDAQ" },
     { "bif_raw_file", 'b', "BIF_FILE", 0, "filename/path of the BIF raw data file" },
     { "dwc_root_file", 'd', "DWC_ROOT_FILE", 0, "filename/path of the DWC root data file" },
+    { "output_file", 'o', "OUTPUT_FILE", 0, "filename/path of the output file" },
+    { "debug_mode", 'x', 0, 0, "" },
     
     { 0 } };
 
@@ -23,6 +25,9 @@ struct arguments_t {
     char *bif_filename;
     char *spiroc_raw_filename;
     char *dwc_root_filename;
+    char *output_filename;
+    int debug_mode;
+    int output_filetype;
 };
 struct arguments_t arguments;
 
@@ -31,6 +36,10 @@ void arguments_init(struct arguments_t* arguments) {
     arguments->spiroc_raw_filename = NULL;
     arguments->bif_filename = NULL;
     arguments->dwc_root_filename = NULL;
+    char init_filename[] = "combine.root";
+    arguments->output_filename = &(init_filename[0]);
+    arguments->debug_mode = 0;
+    arguments->output_filetype = 0;
     //   arguments->print_bif_start_phases = 0;
 }
 
@@ -38,6 +47,7 @@ void arguments_print(struct arguments_t* arguments) {
     printf("#BIF_data_file=\"%s\"\n", arguments->bif_filename);
     printf("#SPIROC_RAW_data_file=\"%s\"\n", arguments->spiroc_raw_filename);
     printf("#DWC_ROOT_data_file=\"%s\"\n", arguments->dwc_root_filename);
+    printf("#output_file=\"%s\"\n", arguments->output_filename);
 }
 
 /* Parse a single option. */
@@ -56,6 +66,14 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
         case 'd':
             arguments->dwc_root_filename = arg;
             break;
+        case 'o':
+            arguments->output_filename = arg;
+            if (strstr(arg,".txt")!=NULL) arguments->output_filetype=1;
+            else if (strstr(arg,".root")==NULL) arguments->output_filetype=-1;
+            break;
+        case 'x':
+            arguments->debug_mode = 1;
+            break;
         case ARGP_KEY_END:
             if (arguments->bif_filename == NULL) {
                 argp_error(state, "missing BIF data filename!\n");
@@ -65,6 +83,9 @@ static error_t parse_opt(int key, char *arg, struct argp_state *state) {
             }
             if (arguments->dwc_root_filename == NULL) {
                 argp_error(state, "missing DWC ROOT filename!\n");
+            }
+            if (arguments->output_filetype == -1) {
+                argp_error(state, "invalid output file type\n");
             }
             //			argp_usage(state);
             //			argp_state_help(state, state->err_stream, ARGP_HELP_USAGE);
@@ -262,56 +283,74 @@ int main(int argc, char **argv) {
     int event_num = 0, matched = 0;
     int match_index = 1;
     
-//    FILE *output = fopen("combined.txt","w");
-    TFile *output = new TFile("combined.root","recreate");
-    TTree *outtree = new TTree("combined","combined events");
+    FILE *outputtxt;
+    TFile *outputroot;
+    TTree *outtree;
+    if (arguments.output_filetype == 0) {
+        outputroot = new TFile(arguments.output_filename,"recreate");
+        outtree = new TTree("combined","combined events");
+    } else {
+        outputtxt = fopen(arguments.output_filename,"w");
+    }
     int ROC;
     u_int32_t bif_trig, ahc_trig;
-    u_int64_t biftime;
+    u_int64_t biftime, biftime_last;
 
-//    fprintf(output,"ROC\tBifTrg#\tAHCTrg#\ttdc (in BIF)\n");
-    outtree->Branch("ROC",&ROC,"ROC/I");
-    outtree->Branch("bif_Trig",&bif_trig,"bif_Trig/i");
-    outtree->Branch("ahc_Trig",&ahc_trig,"ahc_Trig/i");
-    outtree->Branch("bif_Time",&biftime,"bif_Time/l");
-    outtree->Branch("dwc_Trig",&dwc_event,"dwc_Trig/i");
-    outtree->Branch("dwc_Time",&dwc_time,"dwc_Time/L");
+    if (arguments.output_filetype == 0) {
+        outtree->Branch("ROC",&ROC,"ROC/I");
+        outtree->Branch("bif_Trig",&bif_trig,"bif_Trig/i");
+        outtree->Branch("ahc_Trig",&ahc_trig,"ahc_Trig/i");
+        outtree->Branch("bif_Time",&biftime,"bif_Time/l");
+        outtree->Branch("dwc_Trig",&dwc_event,"dwc_Trig/i");
+        outtree->Branch("dwc_Time",&dwc_time,"dwc_Time/L");
+    } else {
+        fprintf(outputtxt,"ROC\tBifTrg#\tAHCTrg#\ttdc (in BIF)\n");
+    }
 
     while (-1) {
+        biftime_last = biftime;
         biftime = bif_data.tdc>>5;
         if (TS_diff == 0) TS_diff = biftime - ahcal_data.tdc;
-        dwc_tree->GetEntry(dwc_index++);
+        if (arguments.output_filetype==0) dwc_tree->GetEntry(dwc_index++);
 
         if (biftime - ahcal_data.tdc < TS_diff-1) {
             //bif data only
-            //fprintf(output,"%d\t%d\t-------\t%ld\n",bif_data.ro_cycle-bif_first_data.ro_cycle+1, bif_data.trig_count-bif_first_data.trig_count, biftime);
             ROC = bif_data.ro_cycle-bif_first_data.ro_cycle+1;
             bif_trig = bif_data.trig_count-bif_first_data.trig_count;
             ahc_trig = -1;
-            outtree->Fill();
+            if (arguments.output_filetype==0) outtree->Fill();
+            else fprintf(outputtxt,"%d\t%d\t-------\t%ld\n",ROC, bif_trig, biftime);
             event_num++;
+            if (arguments.debug_mode) {
+                if (biftime-biftime_last<100) printf("%d\ttrigger distance too short\n",event_num);
+                else printf("%d\tunknown ahcal-skip:%ld\n",event_num,biftime-biftime_last);
+            }
             if (load_bif_data(bif_file, &bif_data, &bif_first_data) != 1) {
                 break;
             }
         } else if (biftime - ahcal_data.tdc > TS_diff+1) {
             //ahcal data only
-            //fprintf(output,"%d\t-------\t%d\t%ld\n",ahcal_data.ro_cycle, ahcal_data.trig_count, ahcal_data.tdc+TS_diff);
             ROC = ahcal_data.ro_cycle;
             bif_trig = -1;
             ahc_trig = ahcal_data.trig_count;
             biftime = ahcal_data.tdc+TS_diff;
-            outtree->Fill();
+            if (arguments.output_filetype==0) outtree->Fill();
+            else fprintf(outputtxt,"%d\t-------\t%d\t%ld\n",ROC, ahc_trig, biftime);
             event_num++;
+            if (arguments.debug_mode) {
+                if (biftime-biftime_last>300000) printf("%d\tat the start of a bunch\n",event_num);
+                else printf("%d\tunknown bif-skip\n",event_num);
+            }
             if (load_timestamps_from_ahcal_raw(ahcal_file, &ahcal_data) != 1) {
                 break;
             }
         } else {
             //matched data
-            //fprintf(output,"%d\t%d\t%d\t%ld\n",bif_data.ro_cycle-bif_first_data.ro_cycle+1, bif_data.trig_count-bif_first_data.trig_count, ahcal_data.trig_count, biftime);
             ROC = bif_data.ro_cycle-bif_first_data.ro_cycle+1;
             bif_trig = bif_data.trig_count-bif_first_data.trig_count;
             ahc_trig = ahcal_data.trig_count;
-            outtree->Fill();
+            if (arguments.output_filetype==0) outtree->Fill();
+            else fprintf(outputtxt,"%d\t%d\t%d\t%ld\n",ROC, bif_trig, ahc_trig, biftime);
             event_num++;
             matched++;
             if (load_bif_data(bif_file, &bif_data, &bif_first_data) != 1) {
@@ -343,14 +382,16 @@ int main(int argc, char **argv) {
         if (dwc_index==nEvents) break;
     }
     
-    outtree->Write();
-    output->Close();
-
+    if (arguments.output_filetype==0) {
+        outtree->Write();
+        outputroot->Close();
+    } else {
+        fclose(outputtxt);
+    }
     dwc_file->Close();
     
     fclose(bif_file);
     fclose(ahcal_file);
-    //fclose(output);
 				
     exit(0);
 }
