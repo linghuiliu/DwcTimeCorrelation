@@ -273,7 +273,7 @@ int main(int argc, char **argv) {
     TTree *dwc_tree = (TTree*) dwc_file->Get("DelayWireChambers");
     
     u_int32_t dwc_event;
-    Long64_t dwc_time;
+    Long64_t dwc_time, dwc_first_time=0;
     dwc_tree->SetBranchAddress("event",&dwc_event);
     dwc_tree->SetBranchAddress("timeSinceStart",&dwc_time);
     
@@ -304,14 +304,19 @@ int main(int argc, char **argv) {
         outtree->Branch("dwc_Trig",&dwc_event,"dwc_Trig/i");
         outtree->Branch("dwc_Time",&dwc_time,"dwc_Time/L");
     } else {
-        fprintf(outputtxt,"ROC\tBifTrg#\tAHCTrg#\ttdc (in BIF)\n");
+        fprintf(outputtxt,"ROC\tBifTrg#\tAHCTrg#\tDWCTrg#\ttdc (in BIF)\ttdc (in DWC)\n");
     }
 
     while (-1) {
         biftime_last = biftime;
         biftime = bif_data.tdc>>5;
+        if (bif_first_data.tdc==0) bif_first_data.tdc = biftime;
+        biftime -= bif_first_data.tdc;
         if (TS_diff == 0) TS_diff = biftime - ahcal_data.tdc;
-        if (arguments.output_filetype==0) dwc_tree->GetEntry(dwc_index++);
+        dwc_tree->GetEntry(dwc_index++);
+        if (dwc_first_time==0) dwc_first_time = dwc_time;
+        dwc_time -= dwc_first_time;
+        dwc_time *= 40;
 
         if (biftime - ahcal_data.tdc < TS_diff-1) {
             //bif data only
@@ -319,7 +324,7 @@ int main(int argc, char **argv) {
             bif_trig = bif_data.trig_count-bif_first_data.trig_count;
             ahc_trig = -1;
             if (arguments.output_filetype==0) outtree->Fill();
-            else fprintf(outputtxt,"%d\t%d\t-------\t%ld\n",ROC, bif_trig, biftime);
+            else fprintf(outputtxt,"%d\t%d\t-------\t%d\t%12ld\t%12lld\n",ROC, bif_trig, dwc_event, biftime/40, dwc_time/40);
             event_num++;
             if (arguments.debug_mode) {
                 if (biftime-biftime_last<100) printf("%d\ttrigger distance too short\n",event_num);
@@ -335,7 +340,7 @@ int main(int argc, char **argv) {
             ahc_trig = ahcal_data.trig_count;
             biftime = ahcal_data.tdc+TS_diff;
             if (arguments.output_filetype==0) outtree->Fill();
-            else fprintf(outputtxt,"%d\t-------\t%d\t%ld\n",ROC, ahc_trig, biftime);
+            else fprintf(outputtxt,"%d\t-------\t%d\t%d\t%12ld\t%12lld\n",ROC, ahc_trig, dwc_event, biftime/40, dwc_time/40);
             event_num++;
             if (arguments.debug_mode) {
                 if (biftime-biftime_last>300000) printf("%d\tat the start of a bunch\n",event_num);
@@ -350,7 +355,7 @@ int main(int argc, char **argv) {
             bif_trig = bif_data.trig_count-bif_first_data.trig_count;
             ahc_trig = ahcal_data.trig_count;
             if (arguments.output_filetype==0) outtree->Fill();
-            else fprintf(outputtxt,"%d\t%d\t%d\t%ld\n",ROC, bif_trig, ahc_trig, biftime);
+            else fprintf(outputtxt,"%d\t%d\t%d\t%d\t%12ld\t%12lld\n",ROC, bif_trig, ahc_trig, dwc_event, biftime/40, dwc_time/40);
             event_num++;
             matched++;
             if (load_bif_data(bif_file, &bif_data, &bif_first_data) != 1) {
