@@ -6,6 +6,7 @@
 
 const int C_ROC_READ_LIMIT = 5000000;/*for debugging - reading only few RO cycles*/
 const int C_MAX_BIF_EVENTS = 10*1000*1000;
+const int64_t C_BUNCH_THR = 200000;
 
 static char doc[] = "Statistics printout tool for RAW data dumped from EUDAQ BIF producer.  For more info try --help";
 static char args_doc[] = "";
@@ -273,7 +274,8 @@ int main(int argc, char **argv) {
     TTree *dwc_tree = (TTree*) dwc_file->Get("DelayWireChambers");
     
     u_int32_t dwc_event;
-    Long64_t dwc_time, dwc_first_time=0;
+    Long64_t dwc_time=0, dwc_first_time=0;
+    Long64_t dwc_last_time, dwc_std_time=0;
     dwc_tree->SetBranchAddress("event",&dwc_event);
     dwc_tree->SetBranchAddress("timeSinceStart",&dwc_time);
     
@@ -294,7 +296,9 @@ int main(int argc, char **argv) {
     }
     int ROC;
     u_int32_t bif_trig, ahc_trig;
-    u_int64_t biftime, biftime_last;
+    u_int64_t biftime=0, biftime_last, biftime_std=0;
+
+    int std_index=0;
 
     if (arguments.output_filetype == 0) {
         outtree->Branch("ROC",&ROC,"ROC/I");
@@ -313,6 +317,8 @@ int main(int argc, char **argv) {
         if (bif_first_data.tdc==0) bif_first_data.tdc = biftime;
         biftime -= bif_first_data.tdc;
         if (TS_diff == 0) TS_diff = biftime - ahcal_data.tdc;
+
+        dwc_last_time = dwc_time;
         dwc_tree->GetEntry(dwc_index++);
         if (dwc_first_time==0) dwc_first_time = dwc_time;
         dwc_time -= dwc_first_time;
@@ -365,6 +371,24 @@ int main(int argc, char **argv) {
                 break;
             }
         }
+        if (biftime-biftime_last > C_BUNCH_THR) {
+            int64_t timediff = abs((biftime-biftime_std) - (dwc_time-dwc_std_time));
+            int64_t timediff_bif = abs((biftime_last-biftime_std) - (dwc_time-dwc_std_time));
+            int64_t timediff_dwc = abs((biftime-biftime_std) - (dwc_last_time-dwc_std_time));
+            
+            if (timediff_bif < timediff) {
+                //DWC is missing trigger. compensation to implement.
+                printf("DWC missing trigger between :%d - %d",std_index,event_num-1);
+            } else if (timediff_dwc < timediff) {
+                //AHCAL is missing trigger. compensation to implement.
+                printf("AHCAL missing trigger between :%d - %d",std_index,event_num-1);
+            }
+            
+            biftime_std = biftime;
+            dwc_std_time = dwc_time;
+            std_index = event_num;
+        }
+
         if (event_num == 20 && matched <= 10) {
             match_index++;
             perror("event matching failed\n");
